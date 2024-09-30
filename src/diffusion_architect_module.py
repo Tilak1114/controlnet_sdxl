@@ -46,7 +46,7 @@ def retrieve_timesteps(
 class DiffusionArchitectModule(pl.LightningModule):
     def __init__(self, args):
         super().__init__()
-        model_path = "/data/tilak/projects/sd-lora/checkpoints/v1-5-pruned.safetensors"
+        model_path = "checkpoints/v1-5-pruned.safetensors"
         
         self.pipe = StableDiffusionPipeline.from_single_file(
             model_path,
@@ -130,8 +130,6 @@ class DiffusionArchitectModule(pl.LightningModule):
     def generate(self, prompt, 
                 negative_prompt = "low res", 
                 control_net_input = None,
-                timesteps = None, 
-                sigmas = None,
                 num_inference_steps=50,
                 guidance_scale=6.0):
         with torch.no_grad():
@@ -156,7 +154,7 @@ class DiffusionArchitectModule(pl.LightningModule):
             prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds])
 
             timesteps, num_inference_steps = retrieve_timesteps(
-                self.noise_scheduler, num_inference_steps, self.device, timesteps, sigmas
+                self.noise_scheduler, num_inference_steps, self.device, None, None
             )
 
             num_channels_latents = self.unet.config.in_channels
@@ -173,7 +171,7 @@ class DiffusionArchitectModule(pl.LightningModule):
 
                 # expand the latents if we are doing classifier free guidance
                 latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
-                latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
+                latent_model_input = self.noise_scheduler.scale_model_input(latent_model_input, t)
 
                 # predict the noise residual
                 # noise_pred = self.unet(
@@ -186,7 +184,7 @@ class DiffusionArchitectModule(pl.LightningModule):
                 noise_pred = self.forward(
                     latent_model_input, 
                     t,
-                    encoder_hidden_states=prompt_embeds,
+                    prompt_embeds,
                     )
 
                 # perform guidance
@@ -195,18 +193,14 @@ class DiffusionArchitectModule(pl.LightningModule):
                     noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_text - noise_pred_uncond)
 
                 # compute the previous noisy sample x_t -> x_t-1
-                latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
+                latents = self.noise_scheduler.step(noise_pred, t, latents, return_dict=False)[0]
 
-                image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False,)[
-                    0
-                ]
+            image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False,)[0]
+            image = (image/ 2 + 0.5).clamp(0, 1)
+            #temp squuze. fix later
+            image = (image.squeeze(0).detach().cpu().permute(1,2,0).numpy() * 255).astype("uint8")
 
-                if image.ndim == 3:
-                    images = image[None, ...]
-                images = (images * 255).round().astype("uint8")
-                pil_images = [Image.fromarray(image) for image in images]
-
-                return pil_images
+            return Image.fromarray(image)
 
     
     def forward(self, latent, timestep, encoder_hidden):
@@ -215,7 +209,7 @@ class DiffusionArchitectModule(pl.LightningModule):
             timestep,
             encoder_hidden,
             return_dict=False
-        ).sample
+        )[0]
     
     def encode_prompt(
         self,
@@ -344,9 +338,4 @@ class DiffusionArchitectModule(pl.LightningModule):
                     f" got: `prompt_embeds` {prompt_embeds.shape} != `negative_prompt_embeds`"
                     f" {negative_prompt_embeds.shape}."
                 )
-    
-    def test(self,):
-        prompt = "a modern living room with minimalist design"
-        image = self.forward(prompt)
-
-        image.save("modern_living_room_design.png")
+            
