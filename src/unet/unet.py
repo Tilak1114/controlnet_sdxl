@@ -161,7 +161,6 @@ class UNet2DConditionModel(
         sample_size: Optional[int] = None,
         in_channels: int = 4,
         out_channels: int = 4,
-        center_input_sample: bool = False,
         flip_sin_to_cos: bool = True,
         freq_shift: int = 0,
         down_block_types: Tuple[str] = (
@@ -211,6 +210,7 @@ class UNet2DConditionModel(
         mid_block_only_cross_attention: Optional[bool] = None,
         cross_attention_norm: Optional[str] = None,
         addition_embed_type_num_heads: int = 64,
+        disable_up_blocks = False,
     ):
         super().__init__()
 
@@ -397,61 +397,62 @@ class UNet2DConditionModel(
         self.num_upsamplers = 0
 
         # up
-        reversed_block_out_channels = list(reversed(block_out_channels))
-        reversed_num_attention_heads = list(reversed(num_attention_heads))
-        reversed_layers_per_block = list(reversed(layers_per_block))
-        reversed_cross_attention_dim = list(reversed(cross_attention_dim))
-        reversed_transformer_layers_per_block = (
-            list(reversed(transformer_layers_per_block))
-            if reverse_transformer_layers_per_block is None
-            else reverse_transformer_layers_per_block
-        )
-        only_cross_attention = list(reversed(only_cross_attention))
-
-        output_channel = reversed_block_out_channels[0]
-        for i, up_block_type in enumerate(up_block_types):
-            is_final_block = i == len(block_out_channels) - 1
-
-            prev_output_channel = output_channel
-            output_channel = reversed_block_out_channels[i]
-            input_channel = reversed_block_out_channels[min(i + 1, len(block_out_channels) - 1)]
-
-            # add upsample block for all BUT final layer
-            if not is_final_block:
-                add_upsample = True
-                self.num_upsamplers += 1
-            else:
-                add_upsample = False
-
-            up_block = get_up_block(
-                up_block_type,
-                num_layers=reversed_layers_per_block[i] + 1,
-                transformer_layers_per_block=reversed_transformer_layers_per_block[i],
-                in_channels=input_channel,
-                out_channels=output_channel,
-                prev_output_channel=prev_output_channel,
-                temb_channels=blocks_time_embed_dim,
-                add_upsample=add_upsample,
-                resnet_eps=norm_eps,
-                resnet_act_fn=act_fn,
-                resolution_idx=i,
-                resnet_groups=norm_num_groups,
-                cross_attention_dim=reversed_cross_attention_dim[i],
-                num_attention_heads=reversed_num_attention_heads[i],
-                dual_cross_attention=dual_cross_attention,
-                use_linear_projection=use_linear_projection,
-                only_cross_attention=only_cross_attention[i],
-                upcast_attention=upcast_attention,
-                resnet_time_scale_shift=resnet_time_scale_shift,
-                attention_type=attention_type,
-                resnet_skip_time_act=resnet_skip_time_act,
-                resnet_out_scale_factor=resnet_out_scale_factor,
-                cross_attention_norm=cross_attention_norm,
-                attention_head_dim=attention_head_dim[i] if attention_head_dim[i] is not None else output_channel,
-                dropout=dropout,
+        if not disable_up_blocks:
+            reversed_block_out_channels = list(reversed(block_out_channels))
+            reversed_num_attention_heads = list(reversed(num_attention_heads))
+            reversed_layers_per_block = list(reversed(layers_per_block))
+            reversed_cross_attention_dim = list(reversed(cross_attention_dim))
+            reversed_transformer_layers_per_block = (
+                list(reversed(transformer_layers_per_block))
+                if reverse_transformer_layers_per_block is None
+                else reverse_transformer_layers_per_block
             )
-            self.up_blocks.append(up_block)
-            prev_output_channel = output_channel
+            only_cross_attention = list(reversed(only_cross_attention))
+
+            output_channel = reversed_block_out_channels[0]
+            for i, up_block_type in enumerate(up_block_types):
+                is_final_block = i == len(block_out_channels) - 1
+
+                prev_output_channel = output_channel
+                output_channel = reversed_block_out_channels[i]
+                input_channel = reversed_block_out_channels[min(i + 1, len(block_out_channels) - 1)]
+
+                # add upsample block for all BUT final layer
+                if not is_final_block:
+                    add_upsample = True
+                    self.num_upsamplers += 1
+                else:
+                    add_upsample = False
+
+                up_block = get_up_block(
+                    up_block_type,
+                    num_layers=reversed_layers_per_block[i] + 1,
+                    transformer_layers_per_block=reversed_transformer_layers_per_block[i],
+                    in_channels=input_channel,
+                    out_channels=output_channel,
+                    prev_output_channel=prev_output_channel,
+                    temb_channels=blocks_time_embed_dim,
+                    add_upsample=add_upsample,
+                    resnet_eps=norm_eps,
+                    resnet_act_fn=act_fn,
+                    resolution_idx=i,
+                    resnet_groups=norm_num_groups,
+                    cross_attention_dim=reversed_cross_attention_dim[i],
+                    num_attention_heads=reversed_num_attention_heads[i],
+                    dual_cross_attention=dual_cross_attention,
+                    use_linear_projection=use_linear_projection,
+                    only_cross_attention=only_cross_attention[i],
+                    upcast_attention=upcast_attention,
+                    resnet_time_scale_shift=resnet_time_scale_shift,
+                    attention_type=attention_type,
+                    resnet_skip_time_act=resnet_skip_time_act,
+                    resnet_out_scale_factor=resnet_out_scale_factor,
+                    cross_attention_norm=cross_attention_norm,
+                    attention_head_dim=attention_head_dim[i] if attention_head_dim[i] is not None else output_channel,
+                    dropout=dropout,
+                )
+                self.up_blocks.append(up_block)
+                prev_output_channel = output_channel
 
         # out
         if norm_num_groups is not None:
@@ -1029,6 +1030,7 @@ class UNet2DConditionModel(
         sample: torch.Tensor,
         timestep: Union[torch.Tensor, float, int],
         encoder_hidden_states: torch.Tensor,
+        hint_block_op = None,
         class_labels: Optional[torch.Tensor] = None,
         timestep_cond: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
@@ -1154,6 +1156,11 @@ class UNet2DConditionModel(
 
         # 2. pre-process
         sample = self.conv_in(sample)
+        
+        if self.is_controlnet:
+            sample += hint_block_op
+
+        should_add_controlnet_residuals = not self.is_controlnet and mid_block_additional_residual is not None and down_block_additional_residuals is not None
 
         down_block_res_samples = (sample,)
         for downsample_block in self.down_blocks:
@@ -1174,6 +1181,17 @@ class UNet2DConditionModel(
                 sample, res_samples = downsample_block(hidden_states=sample, temb=emb)
 
             down_block_res_samples += res_samples
+        
+        if should_add_controlnet_residuals:
+            new_down_block_res_samples = ()
+
+            for down_block_res_sample, down_block_additional_residual in zip(
+                down_block_res_samples, down_block_additional_residuals
+            ):
+                down_block_res_sample = down_block_res_sample + down_block_additional_residual
+                new_down_block_res_samples = new_down_block_res_samples + (down_block_res_sample,)
+
+            down_block_res_samples = new_down_block_res_samples
 
         # 4. mid
         if self.mid_block is not None:
@@ -1189,6 +1207,12 @@ class UNet2DConditionModel(
             else:
                 sample = self.mid_block(sample, emb)
 
+        if should_add_controlnet_residuals:
+            sample = sample + mid_block_additional_residual
+        
+        if self.is_controlnet:
+            return down_block_res_sample, sample
+            
         # 5. up
         for i, upsample_block in enumerate(self.up_blocks):
             is_final_block = i == len(self.up_blocks) - 1

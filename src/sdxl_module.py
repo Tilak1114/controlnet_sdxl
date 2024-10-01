@@ -3,6 +3,7 @@ import pytorch_lightning as pl
 import torch
 from diffusers import AutoencoderKL, DDPMScheduler
 from unet.unet import UNet2DConditionModel
+from controlnet import ControlNet
 from typing import List, Optional, Union
 import torch.nn.functional as F
 from PIL import Image
@@ -50,20 +51,16 @@ def retrieve_timesteps(
     return timesteps, num_inference_steps
 
 
-class SDXLArchitectModule(pl.LightningModule):
+class SDXLModule(pl.LightningModule):
     def __init__(self, args, ):
         super().__init__()
-        # model_path = "checkpoints/v1-5-pruned.safetensors"
         model_name = "stabilityai/stable-diffusion-xl-base-1.0"
-
-        # self.pipe = StableDiffusionPipeline.from_single_file(
-        #     model_path,
-        # ).to('cuda')
 
         self.args = args
 
-        height = None
-        width = None
+        height = 1024
+        width = 1024
+        hint_image_size = 1024
 
         self.do_classifier_free_guidance = True
 
@@ -71,20 +68,24 @@ class SDXLArchitectModule(pl.LightningModule):
             model_name, subfolder='unet'
         )
 
-        # self.unet.load_state_dict(self.unet_state_dict)
-        # self.controlnet = self.unet.clone()
-
         self.vae: AutoencoderKL = AutoencoderKL.from_pretrained(
             model_name, subfolder='vae'
         )
 
-        self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
+        self.vae_scale_factor = 2 ** (
+            len(self.vae.config.block_out_channels) - 1)
 
         self.height = height or self.unet.config.sample_size * self.vae_scale_factor
         self.width = width or self.unet.config.sample_size * self.vae_scale_factor
 
-        self.noise_scheduler =  DDPMScheduler.from_pretrained(
-            model_name, subfolder="scheduler", 
+        latent_size = self.height // self.vae_scale_factor
+        downscale_factor = hint_image_size // latent_size
+        self.controlnet = ControlNet(self.unet.config,
+                                     self.unet.state_dict(),
+                                     img_to_latent_downsample_factor=downscale_factor)
+
+        self.noise_scheduler = DDPMScheduler.from_pretrained(
+            model_name, subfolder="scheduler",
             rescale_betas_zero_snr=True)
 
         self.tokenizer = CLIPTokenizer.from_pretrained(
@@ -94,7 +95,7 @@ class SDXLArchitectModule(pl.LightningModule):
         self.tokenizer_2 = CLIPTokenizer.from_pretrained(
             model_name, subfolder="tokenizer_2")
         self.text_encoder_2 = CLIPTextModelWithProjection.from_pretrained(
-           model_name, subfolder="text_encoder_2")
+            model_name, subfolder="text_encoder_2")
 
         self.vae.requires_grad_(False)
         self.text_encoder.requires_grad_(False)
@@ -123,34 +124,26 @@ class SDXLArchitectModule(pl.LightningModule):
 
         bsz = model_input.shape[0]
         timesteps = torch.randint(
-            0, self.noise_scheduler.config.num_train_timesteps, (bsz,), device=self.device)
-
-        noisy_latents = self.noise_scheduler.add_noise(
-            model_input, noise, timesteps)
-
-        prompt_embeds, negative_prompt_embeds = self.encode_prompt(
-            prompt,
-            negative_prompt,
+            0,
+            self.noise_scheduler.config.num_train_timesteps,
+            (bsz,),
+            device=self.device
         )
 
-        # This is for classifier free guidance. We are treating negative prompt as unconditional tokens if negative prompt is provided.
-        prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds])
+        return None
 
-        noise_pred = self.forward(noisy_latents, timesteps, prompt_embeds)
-
-        loss = F.mse_loss(noise_pred, noise, reduction="mean")
-        return loss
-    
     def _get_add_time_ids(
-        self, original_size, 
-        crops_coords_top_left, 
-        target_size, dtype, 
+        self, original_size,
+        crops_coords_top_left,
+        target_size, dtype,
         text_encoder_projection_dim=None
     ):
-        add_time_ids = list(original_size + crops_coords_top_left + target_size)
+        add_time_ids = list(
+            original_size + crops_coords_top_left + target_size)
 
         passed_add_embed_dim = (
-            self.unet.config.addition_time_embed_dim * len(add_time_ids) + text_encoder_projection_dim
+            self.unet.config.addition_time_embed_dim *
+            len(add_time_ids) + text_encoder_projection_dim
         )
         expected_add_embed_dim = self.unet.add_embedding.linear_1.in_features
 
@@ -181,8 +174,8 @@ class SDXLArchitectModule(pl.LightningModule):
 
     def generate(self, prompt,
                  negative_prompt="low res",
-                 prompt_2 = None, 
-                 negative_prompt_2 = None,
+                 prompt_2=None,
+                 negative_prompt_2=None,
                  control_net_input=None,
                  num_inference_steps=50,
                  num_images_per_prompt=1,
@@ -199,9 +192,9 @@ class SDXLArchitectModule(pl.LightningModule):
                 batch_size = len(prompt)
 
             (prompt_embeds,
-            negative_prompt_embeds,
-            pooled_prompt_embeds,
-            negative_pooled_prompt_embeds,) = self.encode_prompt(
+             negative_prompt_embeds,
+             pooled_prompt_embeds,
+             negative_pooled_prompt_embeds,) = self.encode_prompt(
                 prompt=prompt,
                 prompt_2=prompt_2,
                 num_images_per_prompt=num_images_per_prompt,
@@ -225,10 +218,11 @@ class SDXLArchitectModule(pl.LightningModule):
 
             add_text_embeds = pooled_prompt_embeds
             if self.text_encoder_2 is None:
-                text_encoder_projection_dim = int(pooled_prompt_embeds.shape[-1])
+                text_encoder_projection_dim = int(
+                    pooled_prompt_embeds.shape[-1])
             else:
                 text_encoder_projection_dim = self.text_encoder_2.config.projection_dim
-            
+
             add_time_ids = self._get_add_time_ids(
                 (self.height, self.width),
                 (0, 0),
@@ -240,13 +234,17 @@ class SDXLArchitectModule(pl.LightningModule):
             negative_add_time_ids = add_time_ids
 
             if self.do_classifier_free_guidance:
-                prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
-                add_text_embeds = torch.cat([negative_pooled_prompt_embeds, add_text_embeds], dim=0)
-                add_time_ids = torch.cat([negative_add_time_ids, add_time_ids], dim=0)
+                prompt_embeds = torch.cat(
+                    [negative_prompt_embeds, prompt_embeds], dim=0)
+                add_text_embeds = torch.cat(
+                    [negative_pooled_prompt_embeds, add_text_embeds], dim=0)
+                add_time_ids = torch.cat(
+                    [negative_add_time_ids, add_time_ids], dim=0)
 
             prompt_embeds = prompt_embeds.to(self.device)
             add_text_embeds = add_text_embeds.to(self.device)
-            add_time_ids = add_time_ids.to(self.device).repeat(batch_size * num_images_per_prompt, 1)
+            add_time_ids = add_time_ids.to(self.device).repeat(
+                batch_size * num_images_per_prompt, 1)
 
             for i, t in enumerate(timesteps):
 
@@ -263,7 +261,8 @@ class SDXLArchitectModule(pl.LightningModule):
                 #     encoder_hidden_states=prompt_embeds,
                 #     return_dict=False,
                 # )[0]
-                added_cond_kwargs = {"text_embeds": add_text_embeds, "time_ids": add_time_ids}
+                added_cond_kwargs = {
+                    "text_embeds": add_text_embeds, "time_ids": add_time_ids}
                 noise_pred = self.forward(
                     latent_model_input,
                     t,
@@ -283,14 +282,18 @@ class SDXLArchitectModule(pl.LightningModule):
 
             # unscale/denormalize the latents
             # denormalize with the mean and std if available and not None
-            has_latents_mean = hasattr(self.vae.config, "latents_mean") and self.vae.config.latents_mean is not None
-            has_latents_std = hasattr(self.vae.config, "latents_std") and self.vae.config.latents_std is not None
+            has_latents_mean = hasattr(
+                self.vae.config, "latents_mean") and self.vae.config.latents_mean is not None
+            has_latents_std = hasattr(
+                self.vae.config, "latents_std") and self.vae.config.latents_std is not None
             if has_latents_mean and has_latents_std:
                 latents_mean = (
-                    torch.tensor(self.vae.config.latents_mean).view(1, 4, 1, 1).to(latents.device, latents.dtype)
+                    torch.tensor(self.vae.config.latents_mean).view(
+                        1, 4, 1, 1).to(latents.device, latents.dtype)
                 )
                 latents_std = (
-                    torch.tensor(self.vae.config.latents_std).view(1, 4, 1, 1).to(latents.device, latents.dtype)
+                    torch.tensor(self.vae.config.latents_std).view(
+                        1, 4, 1, 1).to(latents.device, latents.dtype)
                 )
                 latents = latents * latents_std / self.vae.config.scaling_factor + latents_mean
             else:
@@ -304,21 +307,30 @@ class SDXLArchitectModule(pl.LightningModule):
 
             return Image.fromarray(image)
 
-    def forward(self, latent, timestep, encoder_hidden_states, added_cond_kwargs = None):
+    def forward(self, latent, timestep, encoder_hidden_states, added_cond_kwargs=None, hint=None):
+        controlnet_downblock_residuals, control_midblock_residuals = self.controlnet(
+            latent,
+            timestep,
+            encoder_hidden_states,
+            hint,
+            added_cond_kwargs=None
+        )
         return self.unet(
             latent,
             timestep,
             encoder_hidden_states=encoder_hidden_states,
             added_cond_kwargs=added_cond_kwargs,
+            down_block_additional_residuals= controlnet_downblock_residuals,
+            mid_block_additional_residual= control_midblock_residuals,
             return_dict=False
         )[0]
 
     def encode_prompt(
         self,
         prompt,
-        prompt_2 = None,
+        prompt_2=None,
         negative_prompt=None,
-        negative_prompt_2 = None,
+        negative_prompt_2=None,
         num_images_per_prompt=1,
     ):
         prompt = [prompt] if isinstance(prompt, str) else prompt
@@ -327,9 +339,11 @@ class SDXLArchitectModule(pl.LightningModule):
         elif prompt is not None and isinstance(prompt, list):
             batch_size = len(prompt)
 
-        tokenizers = [self.tokenizer, self.tokenizer_2] if self.tokenizer is not None else [self.tokenizer_2]
+        tokenizers = [self.tokenizer, self.tokenizer_2] if self.tokenizer is not None else [
+            self.tokenizer_2]
         text_encoders = (
-            [self.text_encoder, self.text_encoder_2] if self.text_encoder is not None else [self.text_encoder_2]
+            [self.text_encoder, self.text_encoder_2] if self.text_encoder is not None else [
+                self.text_encoder_2]
         )
 
         prompt_2 = prompt_2 or prompt
@@ -349,12 +363,13 @@ class SDXLArchitectModule(pl.LightningModule):
             )
 
             text_input_ids = text_inputs.input_ids
-           
-            prompt_embeds = text_encoder(text_input_ids.to(self.device), output_hidden_states=True)
+
+            prompt_embeds = text_encoder(text_input_ids.to(
+                self.device), output_hidden_states=True)
 
             # We are only ALWAYS interested in the pooled output of the final text encoder
             pooled_prompt_embeds = prompt_embeds[0]
-            
+
             prompt_embeds = prompt_embeds.hidden_states[-2]
 
             prompt_embeds_list.append(prompt_embeds)
@@ -364,15 +379,20 @@ class SDXLArchitectModule(pl.LightningModule):
         zero_out_negative_prompt = negative_prompt is None
         if self.do_classifier_free_guidance and zero_out_negative_prompt:
             negative_prompt_embeds = torch.zeros_like(prompt_embeds)
-            negative_pooled_prompt_embeds = torch.zeros_like(pooled_prompt_embeds)
+            negative_pooled_prompt_embeds = torch.zeros_like(
+                pooled_prompt_embeds)
         elif self.do_classifier_free_guidance:
             negative_prompt = negative_prompt or ""
             negative_prompt_2 = negative_prompt_2 or negative_prompt
 
             # normalize str to list
-            negative_prompt = batch_size * [negative_prompt] if isinstance(negative_prompt, str) else negative_prompt
+            negative_prompt = batch_size * \
+                [negative_prompt] if isinstance(
+                    negative_prompt, str) else negative_prompt
             negative_prompt_2 = (
-                batch_size * [negative_prompt_2] if isinstance(negative_prompt_2, str) else negative_prompt_2
+                batch_size *
+                [negative_prompt_2] if isinstance(
+                    negative_prompt_2, str) else negative_prompt_2
             )
 
             uncond_tokens: List[str]
@@ -390,7 +410,6 @@ class SDXLArchitectModule(pl.LightningModule):
             else:
                 uncond_tokens = [negative_prompt, negative_prompt_2]
 
-
             negative_prompt_embeds_list = []
             for negative_prompt, tokenizer, text_encoder in zip(uncond_tokens, tokenizers, text_encoders):
                 max_length = prompt_embeds.shape[1]
@@ -406,35 +425,43 @@ class SDXLArchitectModule(pl.LightningModule):
                     uncond_input.input_ids.to(self.device),
                     output_hidden_states=True,
                 )
-               
+
                 negative_pooled_prompt_embeds = negative_prompt_embeds[0]
                 negative_prompt_embeds = negative_prompt_embeds.hidden_states[-2]
 
                 negative_prompt_embeds_list.append(negative_prompt_embeds)
 
-            negative_prompt_embeds = torch.concat(negative_prompt_embeds_list, dim=-1)
+            negative_prompt_embeds = torch.concat(
+                negative_prompt_embeds_list, dim=-1)
 
             if self.text_encoder_2 is not None:
-                prompt_embeds = prompt_embeds.to(dtype=self.text_encoder_2.dtype, device=self.device)
+                prompt_embeds = prompt_embeds.to(
+                    dtype=self.text_encoder_2.dtype, device=self.device)
             else:
-                prompt_embeds = prompt_embeds.to(dtype=self.unet.dtype, device=self.device)
+                prompt_embeds = prompt_embeds.to(
+                    dtype=self.unet.dtype, device=self.device)
 
             bs_embed, seq_len, _ = prompt_embeds.shape
             # duplicate text embeddings for each generation per prompt, using mps friendly method
             prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
-            prompt_embeds = prompt_embeds.view(bs_embed * num_images_per_prompt, seq_len, -1)
+            prompt_embeds = prompt_embeds.view(
+                bs_embed * num_images_per_prompt, seq_len, -1)
 
             if self.do_classifier_free_guidance:
                 # duplicate unconditional embeddings for each generation per prompt, using mps friendly method
                 seq_len = negative_prompt_embeds.shape[1]
 
                 if self.text_encoder_2 is not None:
-                    negative_prompt_embeds = negative_prompt_embeds.to(dtype=self.text_encoder_2.dtype, device=self.device)
+                    negative_prompt_embeds = negative_prompt_embeds.to(
+                        dtype=self.text_encoder_2.dtype, device=self.device)
                 else:
-                    negative_prompt_embeds = negative_prompt_embeds.to(dtype=self.unet.dtype, device=self.device)
+                    negative_prompt_embeds = negative_prompt_embeds.to(
+                        dtype=self.unet.dtype, device=self.device)
 
-                negative_prompt_embeds = negative_prompt_embeds.repeat(1, num_images_per_prompt, 1)
-                negative_prompt_embeds = negative_prompt_embeds.view(batch_size * num_images_per_prompt, seq_len, -1)
+                negative_prompt_embeds = negative_prompt_embeds.repeat(
+                    1, num_images_per_prompt, 1)
+                negative_prompt_embeds = negative_prompt_embeds.view(
+                    batch_size * num_images_per_prompt, seq_len, -1)
 
         pooled_prompt_embeds = pooled_prompt_embeds.repeat(1, num_images_per_prompt).view(
             bs_embed * num_images_per_prompt, -1
@@ -446,7 +473,6 @@ class SDXLArchitectModule(pl.LightningModule):
             )
 
         return prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds
-            
 
     def check_inputs(
         self,
