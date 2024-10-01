@@ -211,6 +211,7 @@ class UNet2DConditionModel(
         cross_attention_norm: Optional[str] = None,
         addition_embed_type_num_heads: int = 64,
         disable_up_blocks = False,
+        is_controlnet = False,
     ):
         super().__init__()
 
@@ -228,6 +229,9 @@ class UNet2DConditionModel(
         # Changing `attention_head_dim` to `num_attention_heads` for 40,000+ configurations is too backwards breaking
         # which is why we correct for the naming here.
         num_attention_heads = num_attention_heads or attention_head_dim
+
+        self.is_controlnet = is_controlnet
+        self.disable_up_blocks = disable_up_blocks
 
         # Check inputs
         self._check_config(
@@ -397,7 +401,7 @@ class UNet2DConditionModel(
         self.num_upsamplers = 0
 
         # up
-        if not disable_up_blocks:
+        if not self.disable_up_blocks:
             reversed_block_out_channels = list(reversed(block_out_channels))
             reversed_num_attention_heads = list(reversed(num_attention_heads))
             reversed_layers_per_block = list(reversed(layers_per_block))
@@ -1211,7 +1215,7 @@ class UNet2DConditionModel(
             sample = sample + mid_block_additional_residual
         
         if self.is_controlnet:
-            return down_block_res_sample, sample
+            return down_block_res_samples, sample
             
         # 5. up
         for i, upsample_block in enumerate(self.up_blocks):

@@ -80,34 +80,34 @@ class DiffusionArchitectModule(pl.LightningModule):
         )
     
     def training_step(self, batch):
-        pixel_values = batch["image"]
-        prompt = batch["prompt"]
-        negative_prompt = batch["negative_prompt"]
+        # pixel_values = batch["image"]
+        # prompt = batch["prompt"]
+        # negative_prompt = batch["negative_prompt"]
 
-        model_input = self.vae.encode(pixel_values).latent_dist.sample()
-        model_input = model_input * self.vae.config.scaling_factor
+        # model_input = self.vae.encode(pixel_values).latent_dist.sample()
+        # model_input = model_input * self.vae.config.scaling_factor
 
-        noise = torch.randn_like(model_input)
+        # noise = torch.randn_like(model_input)
 
-        bsz = model_input.shape[0]
-        timesteps = torch.randint(
-            0, self.noise_scheduler.config.num_train_timesteps, (bsz,), device=self.device)
+        # bsz = model_input.shape[0]
+        # timesteps = torch.randint(
+        #     0, self.noise_scheduler.config.num_train_timesteps, (bsz,), device=self.device)
 
-        noisy_latents = self.noise_scheduler.add_noise(
-            model_input, noise, timesteps)
+        # noisy_latents = self.noise_scheduler.add_noise(
+        #     model_input, noise, timesteps)
         
-        prompt_embeds, negative_prompt_embeds = self.encode_prompt(
-            prompt,
-            negative_prompt,
-        )
+        # prompt_embeds, negative_prompt_embeds = self.encode_prompt(
+        #     prompt,
+        #     negative_prompt,
+        # )
 
-        # This is for classifier free guidance. We are treating negative prompt as unconditional tokens if negative prompt is provided.
-        prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds])
+        # # This is for classifier free guidance. We are treating negative prompt as unconditional tokens if negative prompt is provided.
+        # prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds])
 
-        noise_pred = self.forward(noisy_latents, timesteps, prompt_embeds)
+        # noise_pred = self.forward(noisy_latents, timesteps, prompt_embeds)
 
-        loss = F.mse_loss(noise_pred, noise, reduction="mean")
-        return loss
+        # loss = F.mse_loss(noise_pred, noise, reduction="mean")
+        pass
         
 
     def prepare_latents(self, batch_size, num_channels_latents, height, width, dtype, device, latents=None):
@@ -203,7 +203,7 @@ class DiffusionArchitectModule(pl.LightningModule):
             return Image.fromarray(image)
 
     
-    def forward(self, latent, timestep, encoder_hidden):
+    def forward(self, latent, timestep, encoder_hidden, hint_img):
         return self.unet(
             latent,
             timestep,

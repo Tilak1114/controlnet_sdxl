@@ -10,6 +10,7 @@ from PIL import Image
 from transformers import CLIPTextModel, CLIPTextModelWithProjection, CLIPTokenizer
 
 import inspect
+from tqdm import tqdm
 
 
 def retrieve_timesteps(
@@ -100,6 +101,7 @@ class SDXLModule(pl.LightningModule):
         self.vae.requires_grad_(False)
         self.text_encoder.requires_grad_(False)
         self.unet.requires_grad_(False)
+        self.controlnet.requires_grad_(True)
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
         optimizer_class = torch.optim.AdamW
@@ -242,11 +244,12 @@ class SDXLModule(pl.LightningModule):
                     [negative_add_time_ids, add_time_ids], dim=0)
 
             prompt_embeds = prompt_embeds.to(self.device)
+            control_net_input = control_net_input.to(self.device)
             add_text_embeds = add_text_embeds.to(self.device)
             add_time_ids = add_time_ids.to(self.device).repeat(
                 batch_size * num_images_per_prompt, 1)
 
-            for i, t in enumerate(timesteps):
+            for i, t in enumerate(tqdm(timesteps, desc="Generating...")):
 
                 # expand the latents if we are doing classifier free guidance
                 latent_model_input = torch.cat(
@@ -254,13 +257,6 @@ class SDXLModule(pl.LightningModule):
                 latent_model_input = self.noise_scheduler.scale_model_input(
                     latent_model_input, t)
 
-                # predict the noise residual
-                # noise_pred = self.unet(
-                #     latent_model_input,
-                #     t,
-                #     encoder_hidden_states=prompt_embeds,
-                #     return_dict=False,
-                # )[0]
                 added_cond_kwargs = {
                     "text_embeds": add_text_embeds, "time_ids": add_time_ids}
                 noise_pred = self.forward(
@@ -268,6 +264,7 @@ class SDXLModule(pl.LightningModule):
                     t,
                     encoder_hidden_states=prompt_embeds,
                     added_cond_kwargs=added_cond_kwargs,
+                    hint=control_net_input
                 )
 
                 # perform guidance
@@ -307,15 +304,19 @@ class SDXLModule(pl.LightningModule):
 
             return Image.fromarray(image)
 
-    def forward(self, latent, timestep, encoder_hidden_states, added_cond_kwargs=None, hint=None):
+    def forward(self, latent, 
+                timestep, 
+                encoder_hidden_states,
+                added_cond_kwargs=None, 
+                hint=None):
         controlnet_downblock_residuals, control_midblock_residuals = self.controlnet(
             latent,
             timestep,
-            encoder_hidden_states,
-            hint,
-            added_cond_kwargs=None
+            encoder_hidden_states=encoder_hidden_states,
+            hint_img=hint,
+            added_cond_kwargs=added_cond_kwargs
         )
-        return self.unet(
+        pretrained_output = self.unet(
             latent,
             timestep,
             encoder_hidden_states=encoder_hidden_states,
@@ -324,6 +325,8 @@ class SDXLModule(pl.LightningModule):
             mid_block_additional_residual= control_midblock_residuals,
             return_dict=False
         )[0]
+
+        return pretrained_output
 
     def encode_prompt(
         self,
