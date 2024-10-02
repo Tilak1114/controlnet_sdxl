@@ -26,7 +26,7 @@ def main():
     control_net_input = torchvision.transforms.ToTensor()(canny_image).unsqueeze(0)
 
     diff_arch_module = SDXLModule(None).to('cuda')
-    img = diff_arch_module.generate("Modern white theme living room interior expensive",
+    img = diff_arch_module.generate("modern indian style living room interior",
                                     control_net_input=control_net_input)
     img.save('test.png')
     # diff_arch_module.test("a modern living room with minimalist design")

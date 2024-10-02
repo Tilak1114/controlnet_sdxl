@@ -94,11 +94,22 @@ class ControlNet(nn.Module):
         self.control_unet_down_zero_convs = nn.ModuleList(down_zero_modules)
 
         # Zero Convolution Module for MidBlocks
-        mid_zero_modules = [make_zero_module(nn.Conv2d(
-                                        self.get_channels(self.controlnet_unet.mid_block, ch_type='out'),
-                                        self.get_channels(self.controlnet_unet.mid_block, ch_type='out'),
-                                        kernel_size=1,
-                                        padding=0)) for _ in range(2)]
+        mid_zero_modules = []
+        
+        zero_ch = self.get_channels(self.controlnet_unet.mid_block, ch_type='out')
+        num_zero_modules = 0
+        if self.controlnet_unet.mid_block.resnets:
+            num_zero_modules += len(self.controlnet_unet.mid_block.resnets)
+        if self.controlnet_unet.down_blocks[i].downsamplers:
+            num_zero_modules += len(self.controlnet_unet.mid_block.downsamplers)
+
+        for _ in range(num_zero_modules):
+            mid_zero_modules.append(
+                make_zero_module(nn.Conv2d(zero_ch,
+                                    zero_ch,
+                                    kernel_size=1,
+                                    padding=0))
+            )
         self.control_unet_mid_zero_convs = nn.ModuleList(mid_zero_modules)
     
     def get_channels(self, module, instance_type='conv', ch_type='in'):
@@ -124,7 +135,7 @@ class ControlNet(nn.Module):
         missing_keys = []
         for key in frozen_model_state_dict.keys():
             if key in self.controlnet_unet.state_dict():
-                if not torch.equal(self.controlnet_unet.state_dict()[key], frozen_model_state_dict[key]):
+                if not torch.equal(self.controlnet_unet.state_dict()[key].to('cpu'), frozen_model_state_dict[key]):
                     mismatched_keys.append(key)
             else:
                 missing_keys.append(key)

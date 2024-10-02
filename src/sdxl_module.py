@@ -59,8 +59,8 @@ class SDXLModule(pl.LightningModule):
 
         self.args = args
 
-        height = 1024
-        width = 1024
+        height = self.args.height
+        width = self.args.width
         hint_image_size = 1024
 
         self.do_classifier_free_guidance = True
@@ -100,6 +100,7 @@ class SDXLModule(pl.LightningModule):
 
         self.vae.requires_grad_(False)
         self.text_encoder.requires_grad_(False)
+        self.text_encoder_2.requires_grad_(False)
         self.unet.requires_grad_(False)
         self.controlnet.requires_grad_(True)
 
@@ -108,7 +109,7 @@ class SDXLModule(pl.LightningModule):
 
         return optimizer_class(
             self.parameters(),
-            lr=self.lr,
+            lr=self.args.learning_rate,
             betas=(self.args.adam_beta1, self.args.adam_beta2),
             weight_decay=self.args.adam_weight_decay,
             eps=self.args.adam_epsilon,
@@ -116,8 +117,12 @@ class SDXLModule(pl.LightningModule):
 
     def training_step(self, batch):
         pixel_values = batch["image"]
-        prompt = batch["prompt"]
-        negative_prompt = batch["negative_prompt"]
+        prompt = batch["caption"]
+        prompt_2 = None
+
+        negative_prompt = "monochrome, lowres, bad anatomy, worst quality, low quality"
+        negative_prompt_2 = None
+        hint = batch["hint"]
 
         model_input = self.vae.encode(pixel_values).latent_dist.sample()
         model_input = model_input * self.vae.config.scaling_factor
@@ -132,7 +137,51 @@ class SDXLModule(pl.LightningModule):
             device=self.device
         )
 
-        return None
+        noisy_latents = self.noise_scheduler.add_noise(
+            model_input,
+            noise,
+            timesteps
+        )
+
+        (prompt_embeds,
+             negative_prompt_embeds,
+             pooled_prompt_embeds,
+             negative_pooled_prompt_embeds,) = self.encode_prompt(
+                prompt=prompt,
+                prompt_2=prompt_2,
+                num_images_per_prompt=1,
+                negative_prompt=negative_prompt,
+                negative_prompt_2=negative_prompt_2,
+            )
+        
+        add_text_embeds = pooled_prompt_embeds
+        if self.text_encoder_2 is None:
+            text_encoder_projection_dim = int(
+                pooled_prompt_embeds.shape[-1])
+        else:
+            text_encoder_projection_dim = self.text_encoder_2.config.projection_dim
+
+        add_time_ids = self._get_add_time_ids(
+            (self.height, self.width),
+            (0, 0),
+            (self.height, self.width),
+            dtype=prompt_embeds.dtype,
+            text_encoder_projection_dim=text_encoder_projection_dim,
+        )
+        
+        prompt_embeds = prompt_embeds.to(self.device)
+        hint = hint.to(self.device)
+        add_text_embeds = add_text_embeds.to(self.device)
+        add_time_ids = add_time_ids.to(self.device).repeat(bsz, 1)
+
+        added_cond_kwargs = {
+                    "text_embeds": add_text_embeds, "time_ids": add_time_ids}                   
+        noise_pred = self.forward(noisy_latents, timesteps, 
+                                  encoder_hidden_states=prompt_embeds,
+                                  hint=hint,
+                                  added_cond_kwargs=added_cond_kwargs)
+        loss = F.mse_loss(noise_pred, noise, reduction="mean")
+        return loss
 
     def _get_add_time_ids(
         self, original_size,
@@ -181,12 +230,12 @@ class SDXLModule(pl.LightningModule):
                  control_net_input=None,
                  num_inference_steps=50,
                  num_images_per_prompt=1,
+                 prefix = 'prefix',
                  guidance_scale=6.0):
         with torch.no_grad():
             self.check_inputs(prompt,
                               negative_prompt=negative_prompt
                               )
-            self.guidance_scale = guidance_scale
 
             if prompt is not None and isinstance(prompt, str):
                 batch_size = 1
@@ -270,7 +319,7 @@ class SDXLModule(pl.LightningModule):
                 # perform guidance
                 if self.do_classifier_free_guidance:
                     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                    noise_pred = noise_pred_uncond + self.guidance_scale * \
+                    noise_pred = noise_pred_uncond + guidance_scale * \
                         (noise_pred_text - noise_pred_uncond)
 
                 # compute the previous noisy sample x_t -> x_t-1
@@ -296,13 +345,17 @@ class SDXLModule(pl.LightningModule):
             else:
                 latents = latents / self.vae.config.scaling_factor
 
-            image = self.vae.decode(latents, return_dict=False,)[0]
-            image = (image / 2 + 0.5).clamp(0, 1)
+            images = self.vae.decode(latents, return_dict=False,)[0]
+            images = (images / 2 + 0.5).clamp(0, 1)
             # temp squuze. fix later
-            image = (image.squeeze(0).detach().cpu().permute(
-                1, 2, 0).numpy() * 255).astype("uint8")
 
-            return Image.fromarray(image)
+            images = (images.detach().cpu().permute(0, 2, 3, 1).numpy() * 255).astype("uint8")
+            
+            for i in range(images.shape[0]):
+                image = Image.fromarray(images[i])
+                image.save(f'{self.args.output_dir}/{prefix}_generation_{i}.png')
+
+            return image
 
     def forward(self, latent, 
                 timestep, 

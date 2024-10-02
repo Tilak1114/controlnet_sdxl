@@ -5,6 +5,8 @@ import torch
 import torchvision.transforms as transforms
 import os
 from sklearn.model_selection import train_test_split
+import cv2
+import numpy as np
 
 class DataModule(LightningDataModule):
     def __init__(self, batch_size, num_workers=4):
@@ -12,8 +14,8 @@ class DataModule(LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
 
-        self.image_dir = '/data/tilak/projects/sd-lora/interior_design/data/images'
-        self.caption_csv = '/data/tilak/projects/sd-lora/interior_design/data/living_room_with_blip_captions.csv'
+        self.image_dir = 'data/imgs'
+        self.caption_csv = '/data/tilak/projects/diffarch/data/living_room_with_blip_captions.csv'
 
         self.df = pd.read_csv(self.caption_csv)
         # Create a dictionary to map image names to captions
@@ -27,10 +29,10 @@ class DataModule(LightningDataModule):
 
     def train_dataloader(self):
         # Define data loader for training
-        train_dataset = Dataset(self.image_dir, self.train_images, self.image_caption_map)
+        train_dataset = Dataset(self.image_dir, self.train_images[:100], self.image_caption_map)
         return torch.utils.data.DataLoader(train_dataset, batch_size=self.batch_size, num_workers=self.num_workers)
 
-    def val_dataloader(self):
+    def test_dataloader(self):
         # Define data loader for validation
         val_dataset = Dataset(self.image_dir, self.val_images, self.image_caption_map)
         return torch.utils.data.DataLoader(val_dataset, batch_size=self.batch_size, num_workers=self.num_workers)
@@ -54,11 +56,22 @@ class Dataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         # Load an image and apply transforms to it
         image = Image.open(os.path.join(self.image_dir, self.images[idx])).convert("RGB")
+        image_np_arr = np.array(image)
         image = self.transform(image)
+
+        low_threshold = 100
+        high_threshold = 200
+
+        canny_image = cv2.Canny(image_np_arr, low_threshold, high_threshold)
+        canny_image = canny_image[:, :, None]
+        canny_image = np.concatenate([canny_image, canny_image, canny_image], axis=2)
+        canny_image = Image.fromarray(canny_image)
+        canny_image = self.transform(canny_image)
 
         # Return the transformed image along with its caption
         result = {}
         result['image'] = image
         result['caption'] = self.img_caption_map[self.images[idx]]
+        result['hint'] = canny_image
         
         return result
