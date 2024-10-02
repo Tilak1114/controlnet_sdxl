@@ -61,7 +61,8 @@ def main() -> None:
     fabric = Fabric(
         accelerator="gpu", 
         devices=[0],
-        strategy=strategy
+        strategy="ddp",
+        precision="16-true"
         )  # Enable mixed precision training
     
     fabric.launch()
