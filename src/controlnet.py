@@ -93,24 +93,14 @@ class ControlNet(nn.Module):
                 )
         self.control_unet_down_zero_convs = nn.ModuleList(down_zero_modules)
 
-        # Zero Convolution Module for MidBlocks
-        mid_zero_modules = []
-        
+        # Zero Convolution Module for MidBlocks        
         zero_ch = self.get_channels(self.controlnet_unet.mid_block, ch_type='out')
-        num_zero_modules = 0
-        if self.controlnet_unet.mid_block.resnets:
-            num_zero_modules += len(self.controlnet_unet.mid_block.resnets)
-        if self.controlnet_unet.down_blocks[i].downsamplers:
-            num_zero_modules += len(self.controlnet_unet.mid_block.downsamplers)
-
-        for _ in range(num_zero_modules):
-            mid_zero_modules.append(
-                make_zero_module(nn.Conv2d(zero_ch,
+        self.control_unet_mid_zero_convs = nn.ModuleList([
+            make_zero_module(nn.Conv2d(zero_ch,
                                     zero_ch,
                                     kernel_size=1,
                                     padding=0))
-            )
-        self.control_unet_mid_zero_convs = nn.ModuleList(mid_zero_modules)
+        ])
     
     def get_channels(self, module, instance_type='conv', ch_type='in'):
         if instance_type == 'conv':
@@ -153,8 +143,7 @@ class ControlNet(nn.Module):
         for i in range(len(down_res)):
             zero_conv_down_res.append(self.control_unet_down_zero_convs[i](down_res[i]))
         
-        for i in range(len(mid_res)):
-            zero_conv_mid_res.append(self.control_unet_mid_zero_convs[i](mid_res[i]))
+        zero_conv_mid_res = self.control_unet_mid_zero_convs[0](mid_res[0])
         
-        return zero_conv_down_res, torch.stack(zero_conv_mid_res, dim=0)
+        return zero_conv_down_res, zero_conv_mid_res
 

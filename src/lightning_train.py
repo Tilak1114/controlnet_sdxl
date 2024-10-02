@@ -5,7 +5,7 @@ import os
 import torch
 import torch.distributed as dist
 from lightning.fabric import Fabric
-# from lightning.fabric.strategies.deepspeed import DeepSpeedStrategy
+from lightning.fabric.strategies.deepspeed import DeepSpeedStrategy
 from sdxl_module import SDXLModule
 from data.data_module import DataModule
 from tqdm import tqdm
@@ -56,12 +56,12 @@ def main() -> None:
     
     data_module = DataModule(batch_size=args.train_batch_size)
 
-    # strategy = DeepSpeedStrategy(stage=2)
+    strategy = DeepSpeedStrategy(stage=2)
 
     fabric = Fabric(
         accelerator="gpu", 
         devices=[0],
-        strategy="ddp",
+        strategy=strategy
         )  # Enable mixed precision training
     
     fabric.launch()

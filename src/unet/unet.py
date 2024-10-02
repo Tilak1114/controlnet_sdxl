@@ -1215,7 +1215,7 @@ class UNet2DConditionModel(
             sample = sample + mid_block_additional_residual
         
         if self.is_controlnet:
-            return down_block_res_samples, sample
+            return down_block_res_samples, (sample,)
             
         # 5. up
         for i, upsample_block in enumerate(self.up_blocks):

@@ -66,11 +66,11 @@ class SDXLModule(pl.LightningModule):
         self.do_classifier_free_guidance = True
 
         self.unet: UNet2DConditionModel = UNet2DConditionModel.from_pretrained(
-            model_name, subfolder='unet'
+            model_name, subfolder='unet',
         )
 
         self.vae: AutoencoderKL = AutoencoderKL.from_pretrained(
-            model_name, subfolder='vae'
+            model_name, subfolder='vae',
         )
 
         self.vae_scale_factor = 2 ** (
@@ -124,7 +124,7 @@ class SDXLModule(pl.LightningModule):
         negative_prompt_2 = None
         hint = batch["hint"]
 
-        model_input = self.vae.encode(pixel_values).latent_dist.sample()
+        model_input = self.vae.encode(pixel_values).latent_dist.sample().to(dtype=self.unet.dtype)
         model_input = model_input * self.vae.config.scaling_factor
 
         noise = torch.randn_like(model_input)
@@ -362,6 +362,7 @@ class SDXLModule(pl.LightningModule):
                 encoder_hidden_states,
                 added_cond_kwargs=None, 
                 hint=None):
+        hint = hint.to(dtype=latent.dtype)
         controlnet_downblock_residuals, control_midblock_residuals = self.controlnet(
             latent,
             timestep,
