@@ -17,9 +17,10 @@ vae = AutoencoderKL.from_pretrained(
 
 def encode_image(image):
     # Move image to GPU and encode
-    image = image.to(device=vae.device)
-    latent_dist = vae.encode(image).latent_dist
-    latents = latent_dist.sample() * vae.config.scaling_factor
+    with torch.no_grad():
+        image = image.to(device=vae.device)
+        latent_dist = vae.encode(image).latent_dist
+        latents = latent_dist.sample() * vae.config.scaling_factor
     return latents
 
 for batch in tqdm(data_module.train_dataloader(), desc="Processing Images"):
@@ -27,7 +28,7 @@ for batch in tqdm(data_module.train_dataloader(), desc="Processing Images"):
     img_ids = batch['img_id']
 
     # Encode the batch of images
-    latents = encode_image(images)
+    latents = encode_image(images).cpu()
 
     # Process each image in the batch
     for latent, img_id in zip(latents, img_ids):
@@ -37,4 +38,4 @@ for batch in tqdm(data_module.train_dataloader(), desc="Processing Images"):
         # Save the latent tensor as .pt file
         save_path = os.path.join(latents_save_dir, f"{img_id}.pt")
         torch.save(latent, save_path)
-        print(f"Saved latents for {img_id} at {save_path}")
+        # print(f"Saved latents for {img_id} at {save_path}")

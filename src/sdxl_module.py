@@ -121,9 +121,12 @@ class SDXLModule(pl.LightningModule):
         prompt = batch["caption"]
         prompt_2 = None
 
+        prompt_suffix = '. High res, photorealistic, high quality, realistic'
+        prompt = [p + prompt_suffix for p in prompt]
+
         negative_prompt = "monochrome, lowres, bad anatomy, worst quality, low quality"
         negative_prompt_2 = None
-        hint = batch["hint"]
+        hint = batch["canny_img"]
 
         # model_input = self.vae.encode(pixel_values).latent_dist.sample().to(dtype=self.unet.dtype)
         # model_input = model_input * self.vae.config.scaling_factor
@@ -225,14 +228,15 @@ class SDXLModule(pl.LightningModule):
         return latents
 
     def generate(self, prompt,
-                 negative_prompt="low res",
+                 negative_prompt="low res, low quality, cartoon, painting",
                  prompt_2=None,
                  negative_prompt_2=None,
                  control_net_input=None,
                  num_inference_steps=50,
                  num_images_per_prompt=1,
-                 prefix = 'prefix',
                  guidance_scale=6.0):
+        prompt_suffix = '. High res, photorealistic, high quality, realistic'
+        prompt = [p + prompt_suffix for p in prompt]
         with torch.no_grad():
             self.check_inputs(prompt,
                               negative_prompt=negative_prompt
@@ -298,6 +302,9 @@ class SDXLModule(pl.LightningModule):
             add_text_embeds = add_text_embeds.to(self.device)
             add_time_ids = add_time_ids.to(self.device).repeat(
                 batch_size * num_images_per_prompt, 1)
+            
+            control_net_input = torch.cat(
+                    [control_net_input] * 2) if self.do_classifier_free_guidance else control_net_input
 
             for i, t in enumerate(tqdm(timesteps, desc="Generating...")):
 
@@ -306,7 +313,7 @@ class SDXLModule(pl.LightningModule):
                     [latents] * 2) if self.do_classifier_free_guidance else latents
                 latent_model_input = self.noise_scheduler.scale_model_input(
                     latent_model_input, t)
-
+                
                 added_cond_kwargs = {
                     "text_embeds": add_text_embeds, "time_ids": add_time_ids}
                 noise_pred = self.forward(
@@ -348,38 +355,42 @@ class SDXLModule(pl.LightningModule):
 
             images = self.vae.decode(latents, return_dict=False,)[0]
             images = (images / 2 + 0.5).clamp(0, 1)
-            # temp squuze. fix later
 
             images = (images.detach().cpu().permute(0, 2, 3, 1).numpy() * 255).astype("uint8")
-            
-            for i in range(images.shape[0]):
-                image = Image.fromarray(images[i])
-                image.save(f'{self.args.output_dir}/{prefix}_generation_{i}.png')
 
-            return image
+            return images
 
     def forward(self, latent, 
                 timestep, 
                 encoder_hidden_states,
-                added_cond_kwargs=None, 
-                hint=None):
-        hint = hint.to(dtype=latent.dtype)
-        controlnet_downblock_residuals, control_midblock_residuals = self.controlnet(
-            latent,
-            timestep,
-            encoder_hidden_states=encoder_hidden_states,
-            hint_img=hint,
-            added_cond_kwargs=added_cond_kwargs
-        )
-        pretrained_output = self.unet(
-            latent,
-            timestep,
-            encoder_hidden_states=encoder_hidden_states,
-            added_cond_kwargs=added_cond_kwargs,
-            down_block_additional_residuals= controlnet_downblock_residuals,
-            mid_block_additional_residual= control_midblock_residuals,
-            return_dict=False
-        )[0]
+                hint=None,
+                added_cond_kwargs=None,):
+        if hint is not None:
+            hint = hint.to(dtype=latent.dtype)
+            controlnet_downblock_residuals, control_midblock_residuals = self.controlnet(
+                latent,
+                timestep,
+                encoder_hidden_states=encoder_hidden_states,
+                hint_img=hint,
+                added_cond_kwargs=added_cond_kwargs
+            )
+            pretrained_output = self.unet(
+                latent,
+                timestep,
+                encoder_hidden_states=encoder_hidden_states,
+                added_cond_kwargs=added_cond_kwargs,
+                down_block_additional_residuals= controlnet_downblock_residuals,
+                mid_block_additional_residual= control_midblock_residuals,
+                return_dict=False
+            )[0]
+        else:
+            pretrained_output = self.unet(
+                latent,
+                timestep,
+                encoder_hidden_states=encoder_hidden_states,
+                added_cond_kwargs=added_cond_kwargs,
+                return_dict=False
+            )[0]
 
         return pretrained_output
 
