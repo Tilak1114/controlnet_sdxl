@@ -63,7 +63,7 @@ def main() -> None:
 
     fabric = Fabric(
         accelerator="gpu", 
-        devices=[0],
+        devices=-1,
         strategy=strategy,
         )  # Enable mixed precision training
     

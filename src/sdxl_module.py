@@ -236,7 +236,7 @@ class SDXLModule(pl.LightningModule):
                  num_images_per_prompt=1,
                  guidance_scale=6.0):
         prompt_suffix = '. High res, photorealistic, high quality, realistic'
-        prompt = [p + prompt_suffix for p in prompt]
+        prompt = [p + prompt_suffix for p in prompt] if isinstance(prompt, list) else prompt + prompt_suffix
         with torch.no_grad():
             self.check_inputs(prompt,
                               negative_prompt=negative_prompt
