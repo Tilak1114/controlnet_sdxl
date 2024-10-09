@@ -117,19 +117,19 @@ class SDXLModule(pl.LightningModule):
         )
 
     def training_step(self, batch):
-        model_input = batch["latent"]
+        pixel_values = batch["image"]
         prompt = batch["caption"]
         prompt_2 = None
 
         prompt_suffix = '. High res, photorealistic, high quality, realistic'
         prompt = [p + prompt_suffix for p in prompt]
 
-        negative_prompt = "monochrome, lowres, bad anatomy, worst quality, low quality"
+        negative_prompt = "monochrome, lowres, worst quality, low quality"
         negative_prompt_2 = None
-        hint = batch["canny_img"]
+        hint = batch["hint"]
 
-        # model_input = self.vae.encode(pixel_values).latent_dist.sample().to(dtype=self.unet.dtype)
-        # model_input = model_input * self.vae.config.scaling_factor
+        model_input = self.vae.encode(pixel_values).latent_dist.sample().to(dtype=self.unet.dtype)
+        model_input = model_input * self.vae.config.scaling_factor
 
         noise = torch.randn_like(model_input)
 

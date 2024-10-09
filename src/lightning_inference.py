@@ -25,7 +25,7 @@ def main():
 
     #Path to tryonnet checkpoint
     sdxl_module = SDXLModule(args)
-    ctrlnet_ckpt = '/data/tilak/projects/diffarch/checkpoints/controlnet-10.ckpt'
+    ctrlnet_ckpt = '/data/tilak/projects/diffarch/archive/controlnet-5.ckpt'
 
     checkpoint = torch.load(
         ctrlnet_ckpt, 
@@ -37,7 +37,7 @@ def main():
     sdxl_module.to(args.device)
     sdxl_module.eval()
     
-    image_path = "/data/tilak/projects/diffarch/data/imgs/img_17.jpg"
+    image_path = "/data/tilak/projects/diffarch/data/imgs/img_82897.png"
     prompt = "an interior design of a living room featuring a large sectional couch"
 
     image = Image.open(image_path)
@@ -66,7 +66,7 @@ def main():
         combined_image.paste(gen_image, (canny_image.width, 0))
 
         # Save the combined image
-        combined_image.save(f'{args.output_dir}/inference_generation_10_{i}.png')
+        combined_image.save(f'{args.output_dir}/inference_generation_old_{i}.png')
 
 
 if __name__ == "__main__":
